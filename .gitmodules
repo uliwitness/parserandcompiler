@@ -1,0 +1,6 @@
+[submodule "simpleparser"]
+	path = simpleparser
+	url = git@github.com:uliwitness/simpleparser.git
+[submodule "bytecodeinterpreter"]
+	path = bytecodeinterpreter
+	url = git@github.com:uliwitness/bytecodeinterpreter.git
