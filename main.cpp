@@ -9,10 +9,91 @@ using namespace std;
 using namespace simpleparser;
 using namespace bytecodeinterpreter;
 
-void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruction> compiledCode) {
+void GenerateCodeForStatement(const Statement & currStmt, const std::map<string, int16_t> &variableOffsets, size_t numArguments, std::vector<int16_t> &returnCmdJumpInstructions, vector<Instruction> &compiledCode) {
+    switch(currStmt.mKind) {
+        case StatementKind::VARIABLE_DECLARATION:
+            switch (currStmt.mType.mType) {
+                case INT32: {
+                    int32_t initialValue = 0;
+                    if (!currStmt.mParameters.empty()) {
+                        const auto& initialValueParsed = currStmt.mParameters[0];
+                        if (initialValueParsed.mKind == StatementKind::LITERAL) {
+                            // generate assignment statement
+                        }
+                    }
+                    break;
+                }
+            }
+            break;
+
+        case StatementKind::FUNCTION_CALL:
+            if (currStmt.mName == "return") {
+                if (currStmt.mParameters.size() != 1) {
+                    throw runtime_error("Function \"return\" expects a single parameter.");
+                }
+                GenerateCodeForStatement(currStmt.mParameters[0], variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+                compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, int16_t(-2 - numArguments)});
+                returnCmdJumpInstructions.push_back(compiledCode.size());
+                compiledCode.push_back(Instruction{bytecodeinterpreter::JUMP_BY, 0, 0});
+            } else {
+                throw runtime_error(string("Unknown function \"") + currStmt.mName + "\" called.");
+            }
+            break;
+        case StatementKind::LITERAL:
+            switch (currStmt.mType.mType) {
+                case VOID:
+                    break;
+                case INT8:
+                    break;
+                case UINT8:
+                    break;
+                case INT32: {
+                    int32_t initialValue = stoi(currStmt.mName);
+                    compiledCode.push_back(Instruction{bytecodeinterpreter::PUSH_INT, 0, int16_t(initialValue)});
+                    break;
+                }
+                case UINT32:
+                    break;
+                case DOUBLE:
+                    break;
+                case STRUCT:
+                    break;
+            }
+            break;
+        case StatementKind::OPERATOR_CALL:
+            if (currStmt.mParameters.size() != 2) {
+                throw runtime_error(string("Wrong number of parameters passed to operator \"") + currStmt.mName + "\".");
+            }
+            if (currStmt.mName == "+") {
+                for (auto currParam : currStmt.mParameters) {
+                    GenerateCodeForStatement(currParam, variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+                }
+                compiledCode.push_back(Instruction{bytecodeinterpreter::ADD_INT, 0, 0});
+            } else if (currStmt.mName == "=") {
+                auto foundVar = variableOffsets.find(currStmt.mParameters[0].mName);
+                if (foundVar == variableOffsets.end()) {
+                    throw runtime_error(string("Unknown variable \"") + currStmt.mParameters[0].mName + "\".");
+                }
+                GenerateCodeForStatement(currStmt.mParameters[1], variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+                compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
+            }
+            break;
+        case StatementKind::VARIABLE_NAME:
+            auto foundVar = variableOffsets.find(currStmt.mName);
+            if (foundVar == variableOffsets.end()) {
+                throw runtime_error(string("Unknown variable \"") + currStmt.mParameters[0].mName + "\".");
+            }
+            compiledCode.push_back(Instruction{bytecodeinterpreter::LOAD_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
+            break;
+    }
+}
+
+void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruction> &compiledCode) {
     // First, create all variables based on variable declarations.
     int numIntVariables = 0;
     std::vector<int16_t> returnCmdJumpInstructions;
+    std::map<string, int16_t> variableOffsets;
+    size_t numArguments = currFunc.mParameters.size();
 
     for (const auto& currStmt : currFunc.mStatements) {
         switch(currStmt.mKind) {
@@ -33,6 +114,7 @@ void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruct
                                 initialValue = stoi(initialValueParsed.mName);
                             }
                         }
+                        variableOffsets[currStmt.mName] = numIntVariables;
                         ++numIntVariables;
                         compiledCode.push_back(Instruction{bytecodeinterpreter::PUSH_INT, 0, int16_t(initialValue)});
                         break;
@@ -52,22 +134,13 @@ void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruct
 
     // Actually generate code for the non-literal-variable statements:
     for (const auto& currStmt : currFunc.mStatements) {
-        switch(currStmt.mKind) {
-            case StatementKind::VARIABLE_DECLARATION:
-                break;
-            case StatementKind::FUNCTION_CALL:
-                break;
-            case StatementKind::LITERAL:
-                break;
-            case StatementKind::OPERATOR_CALL:
-                break;
-        }
+        GenerateCodeForStatement(currStmt, variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
     }
 
     // Clean up stack space reserved for variables:
-    size_t cleanupCodeOffset = compiledCode.size() * sizeof(Instruction);
+    size_t cleanupCodeOffset = compiledCode.size();
     for (auto returnCmdJumpInstructionIndex : returnCmdJumpInstructions) {
-        compiledCode[returnCmdJumpInstructionIndex].p2 = cleanupCodeOffset;
+        compiledCode[returnCmdJumpInstructionIndex].p2 = cleanupCodeOffset - returnCmdJumpInstructionIndex;
     }
     for (int x = 0; x < numIntVariables; ++x) {
         compiledCode.push_back(Instruction{bytecodeinterpreter::POP_INT, 0, 0});
@@ -79,7 +152,7 @@ int main(int argc, const char* argv[]) {
     try {
         std::cout << "ParserAndCompiler 0.1\n" << endl;
 
-        FILE *fh = fopen("D:\\CLionProjects\\ParserAndCompiler\\simpleparser\\test.myc", "r");
+        FILE *fh = fopen("D:\\CLionProjects\\ParserAndCompiler\\parserandcompilertest.myc", "r");
         if (!fh) { cerr << "Can't find file." << endl; }
         fseek(fh, 0, SEEK_END);
         size_t fileSize = ftell(fh);
@@ -108,45 +181,45 @@ int main(int argc, const char* argv[]) {
             GenerateCodeForFunction(currFunc.second, compiledCode);
         }
 
-        Instruction code[] = {
-                Instruction{PUSH_INT, 0, 0}, // x
-                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, 0}, // load x
-                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1
-                Instruction{COMP_INT_LT, 0, 0}, // x < 10
-                Instruction{JUMP_BY_IF_ZERO, 0, 10}, // if x >= 10 bail!
-
-                Instruction{PUSH_INT, 0, 4000},
-                Instruction{PUSH_INT, 0, 1042},
-                Instruction{ADD_INT, 0, 0},
-                Instruction{PRINT_INT, 0, 0},
-
-                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, 0}, // load x
-                Instruction{PUSH_INT, 0, 1}, // load 1
-                Instruction{ADD_INT, 0, 0}, // x + 1
-                Instruction{STORE_INT_BASEPOINTER_RELATIVE, 0, 0}, // x = (x + 1)
-                Instruction{JUMP_BY, 0, -12}, // loop back to condition.
-
-                Instruction{PUSH_INT, 0, 0}, // load 0.
-                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1.
-                Instruction{COMP_INT_LT, 0, 0}, // 0 < parameter 1.
-                Instruction{JUMP_BY_IF_ZERO, 0, 8}, // jump past recursive call.
-                Instruction{PUSH_INT, 0, 0}, // reserve space for result.
-                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1.
-                Instruction{PUSH_INT, 0, -1}, // load -1.
-                Instruction{ADD_INT, 0, 0}, // parameter 1 - 1
-                Instruction{CALL, 0, -22}, // call ourselves.
-                Instruction{POP_INT, 0, 0}, // pop parameter.
-                Instruction{POP_INT, 0, 0}, // pop result.
-
-                Instruction{PUSH_INT, 0, 42}, // load 42
-                Instruction{STORE_INT_BASEPOINTER_RELATIVE, 0, -3}, // returnValue = 42
-                Instruction{JUMP_BY, 0, 1}, // jump to function's epilog + actually return.
-                Instruction{POP_INT, 0, 0}, // delete 'x'.
-                Instruction{RETURN, 0, 0}
-        };
+//        Instruction code[] = {
+//                Instruction{PUSH_INT, 0, 0}, // x
+//                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, 0}, // load x
+//                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1
+//                Instruction{COMP_INT_LT, 0, 0}, // x < 10
+//                Instruction{JUMP_BY_IF_ZERO, 0, 10}, // if x >= 10 bail!
+//
+//                Instruction{PUSH_INT, 0, 4000},
+//                Instruction{PUSH_INT, 0, 1042},
+//                Instruction{ADD_INT, 0, 0},
+//                Instruction{PRINT_INT, 0, 0},
+//
+//                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, 0}, // load x
+//                Instruction{PUSH_INT, 0, 1}, // load 1
+//                Instruction{ADD_INT, 0, 0}, // x + 1
+//                Instruction{STORE_INT_BASEPOINTER_RELATIVE, 0, 0}, // x = (x + 1)
+//                Instruction{JUMP_BY, 0, -12}, // loop back to condition.
+//
+//                Instruction{PUSH_INT, 0, 0}, // load 0.
+//                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1.
+//                Instruction{COMP_INT_LT, 0, 0}, // 0 < parameter 1.
+//                Instruction{JUMP_BY_IF_ZERO, 0, 8}, // jump past recursive call.
+//                Instruction{PUSH_INT, 0, 0}, // reserve space for result.
+//                Instruction{LOAD_INT_BASEPOINTER_RELATIVE, 0, -2}, // load parameter 1.
+//                Instruction{PUSH_INT, 0, -1}, // load -1.
+//                Instruction{ADD_INT, 0, 0}, // parameter 1 - 1
+//                Instruction{CALL, 0, -22}, // call ourselves.
+//                Instruction{POP_INT, 0, 0}, // pop parameter.
+//                Instruction{POP_INT, 0, 0}, // pop result.
+//
+//                Instruction{PUSH_INT, 0, 42}, // load 42
+//                Instruction{STORE_INT_BASEPOINTER_RELATIVE, 0, -3}, // returnValue = 42
+//                Instruction{JUMP_BY, 0, 1}, // jump to function's epilog + actually return.
+//                Instruction{POP_INT, 0, 0}, // delete 'x'.
+//                Instruction{RETURN, 0, 0}
+//        };
 
         int16_t resultValue = 0;
-        BytecodeInterpreter::Run(code, { 3 }, &resultValue);
+        BytecodeInterpreter::Run(compiledCode.data(), { 3 }, &resultValue);
 
         cout << "\nResult: " << resultValue << "\ndone." << endl;
 

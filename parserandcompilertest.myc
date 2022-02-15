@@ -1,0 +1,6 @@
+int main(int iterations) {
+    int y = 42;
+    int x = 0;
+    x = x + 68;
+    return(x);
+}
