@@ -9,16 +9,25 @@ using namespace std;
 using namespace simpleparser;
 using namespace bytecodeinterpreter;
 
-void GenerateCodeForStatement(const Statement & currStmt, const std::map<string, int16_t> &variableOffsets, size_t numArguments, std::vector<int16_t> &returnCmdJumpInstructions, vector<Instruction> &compiledCode) {
+struct Parameter {
+    string mName;
+    size_t mIndex;
+};
+
+void GenerateCodeForStatement(const Statement & currStmt, const std::map<string, int16_t> &variableOffsets, map<string, Parameter> parameters, std::vector<int16_t> &returnCmdJumpInstructions, vector<Instruction> &compiledCode) {
     switch(currStmt.mKind) {
         case StatementKind::VARIABLE_DECLARATION:
             switch (currStmt.mType.mType) {
                 case INT32: {
-                    int32_t initialValue = 0;
                     if (!currStmt.mParameters.empty()) {
                         const auto& initialValueParsed = currStmt.mParameters[0];
-                        if (initialValueParsed.mKind == StatementKind::LITERAL) {
-                            // generate assignment statement
+                        if (initialValueParsed.mKind != StatementKind::LITERAL) {
+                            auto foundVar = variableOffsets.find(currStmt.mName);
+                            if (foundVar == variableOffsets.end()) {
+                                throw runtime_error(string("Unknown variable \"") + currStmt.mName + "\".");
+                            }
+                            GenerateCodeForStatement(initialValueParsed, variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
+                            compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
                         }
                     }
                     break;
@@ -31,10 +40,16 @@ void GenerateCodeForStatement(const Statement & currStmt, const std::map<string,
                 if (currStmt.mParameters.size() != 1) {
                     throw runtime_error("Function \"return\" expects a single parameter.");
                 }
-                GenerateCodeForStatement(currStmt.mParameters[0], variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
-                compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, int16_t(-2 - numArguments)});
+                GenerateCodeForStatement(currStmt.mParameters[0], variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
+                compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, int16_t(-2 - parameters.size())});
                 returnCmdJumpInstructions.push_back(compiledCode.size());
                 compiledCode.push_back(Instruction{bytecodeinterpreter::JUMP_BY, 0, 0});
+            } else if (currStmt.mName == "printNum") {
+                if (currStmt.mParameters.size() != 1) {
+                    throw runtime_error("Function \"printNum\" expects a single parameter.");
+                }
+                GenerateCodeForStatement(currStmt.mParameters[0], variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
+                compiledCode.push_back(Instruction{bytecodeinterpreter::PRINT_INT, 0, 0});
             } else {
                 throw runtime_error(string("Unknown function \"") + currStmt.mName + "\" called.");
             }
@@ -64,36 +79,64 @@ void GenerateCodeForStatement(const Statement & currStmt, const std::map<string,
             if (currStmt.mParameters.size() != 2) {
                 throw runtime_error(string("Wrong number of parameters passed to operator \"") + currStmt.mName + "\".");
             }
-            if (currStmt.mName == "+") {
-                for (auto currParam : currStmt.mParameters) {
-                    GenerateCodeForStatement(currParam, variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+            if (currStmt.mName == "+" || currStmt.mName == "<") {
+                Opcode op = ADD_INT;
+                if (currStmt.mName == "<") {
+                    op = COMP_INT_LT;
+                };
+                for (auto& currParam : currStmt.mParameters) {
+                    GenerateCodeForStatement(currParam, variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
                 }
-                compiledCode.push_back(Instruction{bytecodeinterpreter::ADD_INT, 0, 0});
+                compiledCode.push_back(Instruction{op, 0, 0});
             } else if (currStmt.mName == "=") {
                 auto foundVar = variableOffsets.find(currStmt.mParameters[0].mName);
                 if (foundVar == variableOffsets.end()) {
                     throw runtime_error(string("Unknown variable \"") + currStmt.mParameters[0].mName + "\".");
                 }
-                GenerateCodeForStatement(currStmt.mParameters[1], variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+                GenerateCodeForStatement(currStmt.mParameters[1], variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
                 compiledCode.push_back(Instruction{bytecodeinterpreter::STORE_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
             }
             break;
-        case StatementKind::VARIABLE_NAME:
+        case StatementKind::VARIABLE_NAME: {
             auto foundVar = variableOffsets.find(currStmt.mName);
-            if (foundVar == variableOffsets.end()) {
-                throw runtime_error(string("Unknown variable \"") + currStmt.mParameters[0].mName + "\".");
+            if (foundVar != variableOffsets.end()) {
+                compiledCode.push_back(Instruction{bytecodeinterpreter::LOAD_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
+                break;
             }
-            compiledCode.push_back(Instruction{bytecodeinterpreter::LOAD_INT_BASEPOINTER_RELATIVE, 0, foundVar->second});
+            auto foundParam = parameters.find(currStmt.mName);
+            if (foundParam != parameters.end()) {
+                compiledCode.push_back(Instruction{bytecodeinterpreter::LOAD_INT_BASEPOINTER_RELATIVE, 0, int16_t(-1 -parameters.size() + foundParam->second.mIndex)});
+                break;
+            }
+            throw runtime_error(string("Unknown variable \"") + currStmt.mParameters[0].mName + "\".");
             break;
+        }
+        case StatementKind::WHILE_LOOP: {
+            size_t conditionOffset = compiledCode.size();
+            GenerateCodeForStatement(currStmt.mParameters[0], variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
+            size_t conditionFalseJumpInstructionOffset = compiledCode.size();
+            compiledCode.push_back(Instruction{bytecodeinterpreter::JUMP_BY_IF_ZERO, 0, 0});
+            for (auto stmt = currStmt.mParameters.begin() + 1; stmt != currStmt.mParameters.end(); ++stmt ) {
+                GenerateCodeForStatement(*stmt, variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
+            }
+            compiledCode.push_back(Instruction{bytecodeinterpreter::JUMP_BY, 0, int16_t(conditionOffset - compiledCode.size())});
+            compiledCode[conditionFalseJumpInstructionOffset].p2 = int16_t(compiledCode.size() - conditionFalseJumpInstructionOffset);
+            break;
+        }
     }
 }
 
 void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruction> &compiledCode) {
     // First, create all variables based on variable declarations.
     int numIntVariables = 0;
-    std::vector<int16_t> returnCmdJumpInstructions;
-    std::map<string, int16_t> variableOffsets;
-    size_t numArguments = currFunc.mParameters.size();
+    vector<int16_t> returnCmdJumpInstructions;
+    map<string, int16_t> variableOffsets;
+    map<string, Parameter> parameters;
+
+    size_t paramIndex = 0;
+    for (auto& currParamDef : currFunc.mParameters) {
+        parameters[currParamDef.mName] = Parameter{currParamDef.mName, paramIndex++};
+    }
 
     for (const auto& currStmt : currFunc.mStatements) {
         switch(currStmt.mKind) {
@@ -134,7 +177,7 @@ void GenerateCodeForFunction(const FunctionDefinition &currFunc, vector<Instruct
 
     // Actually generate code for the non-literal-variable statements:
     for (const auto& currStmt : currFunc.mStatements) {
-        GenerateCodeForStatement(currStmt, variableOffsets, numArguments, returnCmdJumpInstructions, compiledCode);
+        GenerateCodeForStatement(currStmt, variableOffsets, parameters, returnCmdJumpInstructions, compiledCode);
     }
 
     // Clean up stack space reserved for variables:
@@ -233,3 +276,6 @@ int main(int argc, const char* argv[]) {
 
     return 0;
 }
+
+
+

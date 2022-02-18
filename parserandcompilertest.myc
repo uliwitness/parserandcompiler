@@ -1,6 +1,8 @@
 int main(int iterations) {
-    int y = 42;
     int x = 0;
-    x = x + 68;
+    while (x < iterations) {
+        x = x + 1;
+        printNum(x);
+    };
     return(x);
 }
