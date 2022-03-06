@@ -9,5 +9,5 @@ int main(int iterations) {
         printNum(x);
     };
 
-    return(x + foo(77, 1));
+    return(x + foo(77));
 }
