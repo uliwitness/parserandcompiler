@@ -195,7 +195,11 @@ int main(int argc, const char* argv[]) {
     try {
         std::cout << "ParserAndCompiler 0.1\n" << endl;
 
-        FILE *fh = fopen("D:\\CLionProjects\\ParserAndCompiler\\parserandcompilertest.myc", "r");
+        if (argc < 2) {
+            throw runtime_error("First argument must be script file to run.");
+        }
+
+        FILE *fh = fopen(argv[1], "r");
         if (!fh) { cerr << "Can't find file." << endl; }
         fseek(fh, 0, SEEK_END);
         size_t fileSize = ftell(fh);
